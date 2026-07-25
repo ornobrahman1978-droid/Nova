@@ -2,18 +2,18 @@
    Zuständig ausschließlich für App-Shell-Caching (HTML/Manifest/Icons/Fonts),
    damit NOVA offline startet und aussieht wie gewohnt. KEINE Datenlogik hier —
    Entities, Memory und Settings laufen weiterhin komplett über die
-   Storage-Abstraktion (safeGet/safeSet/safeDelete) in nova.html selbst, dieser
+   Storage-Abstraktion (safeGet/safeSet/safeDelete) in index.html selbst, dieser
    Worker rührt daran nicht an und weiß nichts von ihrer Existenz.
 
    Cache-Versionierung: CACHE_NAME hochzählen, wenn sich der App-Shell-Inhalt
-   ändert (neue nova.html-Version) — alte Caches werden beim nächsten Start
+   ändert (neue index.html-Version) — alte Caches werden beim nächsten Start
    automatisch aufgeräumt (siehe 'activate'). */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = `nova-shell-${CACHE_VERSION}`;
 
 const APP_SHELL = [
-  './nova.html',
+  './index.html',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
@@ -43,12 +43,10 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   const req = event.request;
-  if(req.method !== 'GET') return; // nichts Schreibendes anfassen — keine Sync-Logik, kein Cachen von Mutationen
+  if(req.method !== 'GET') return;
 
   const url = new URL(req.url);
 
-  // Google Fonts: langlebig, ändert sich praktisch nie — Cache First mit
-  // Hintergrund-Auffrischung (Stale-While-Revalidate).
   if(url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com'){
     event.respondWith(
       caches.open(CACHE_NAME).then(cache =>
@@ -64,16 +62,10 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // App-Shell (eigene Datei-Herkunft): Cache First, Netzwerk als Rückfall —
-  // damit NOVA auch ganz ohne Verbindung startet.
   if(url.origin === self.location.origin){
     event.respondWith(
-      caches.match(req).then(cached => cached || fetch(req).catch(() => caches.match('./nova.html')))
+      caches.match(req).then(cached => cached || fetch(req).catch(() => caches.match('./index.html')))
     );
     return;
   }
-
-  // Alles andere (z. B. zukünftige Drittanbieter-Aufrufe): normal durchreichen,
-  // nicht cachen — dieser Worker trifft bewusst keine Annahmen über Dinge,
-  // die er heute noch nicht kennt.
 });
