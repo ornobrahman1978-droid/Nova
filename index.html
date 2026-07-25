@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>NOVA</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 
 <!-- ============ PWA: Manifest + Theme ============ -->
 <link rel="manifest" href="./manifest.json">
@@ -751,6 +752,36 @@
   .wb-btn-primary:hover{filter:brightness(1.1);}
 
   /* ================= PALETTE ================= */
+  /* ================= AUTH SCREEN ================= */
+  #authScreen{
+    position:fixed; inset:0; z-index:500; background:var(--bg);
+    display:flex; align-items:center; justify-content:center;
+    animation:panelContentIn var(--dur-panel) var(--ease-out);
+  }
+  .auth-box{ width:100%; max-width:340px; padding:0 24px; text-align:center; }
+  .auth-title{ font-family:'Instrument Serif',serif; font-style:italic; font-size:32px; color:var(--text); margin-top:4px; }
+  .auth-sub{ font-size:13px; color:var(--text-2); margin-top:8px; margin-bottom:24px; line-height:1.5; }
+  .auth-tabs{ display:flex; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-md); padding:3px; margin-bottom:18px; }
+  .auth-tab{ flex:1; background:transparent; border:none; color:var(--text-3); font-size:12.5px; font-weight:600; padding:8px; border-radius:var(--r-sm); transition:background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease); }
+  .auth-tab.active{ background:var(--accent-dim); color:var(--accent); }
+  #authScreen input{
+    width:100%; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-md);
+    padding:12px 14px; color:var(--text); font-size:14px; margin-bottom:10px; font-family:inherit;
+    transition:border-color var(--dur-fast) var(--ease);
+  }
+  #authScreen input:focus{ outline:none; border-color:var(--accent); }
+  .auth-error{ font-size:12px; color:var(--danger); text-align:left; margin:-2px 0 10px 2px; line-height:1.4; }
+  .auth-submit{
+    width:100%; background:var(--accent); border:none; border-radius:var(--r-md); color:#08110c;
+    font-size:14px; font-weight:700; padding:12px; margin-top:4px;
+    transition:filter var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-spring);
+  }
+  .auth-submit:hover{ filter:brightness(1.08); }
+  .auth-submit:active{ transform:scale(0.98); }
+  .auth-submit:disabled{ opacity:0.6; pointer-events:none; }
+  .auth-skip{ margin-top:18px; font-size:12px; color:var(--text-3); cursor:pointer; transition:color var(--dur-fast) var(--ease); }
+  .auth-skip:hover{ color:var(--text-2); }
+
   #paletteOverlay{
     position:fixed; inset:0; background:rgba(0,0,0,0.55);
     display:none; align-items:flex-start; justify-content:center; padding-top:14vh; z-index:200;
@@ -862,6 +893,25 @@
 </style>
 </head>
 <body>
+
+<div id="authScreen" style="display:none;">
+  <div class="auth-box">
+    <div class="orb" style="margin:0 auto 18px auto;"></div>
+    <div class="auth-title">NOVA</div>
+    <div class="auth-sub" id="authSubtitle">Melde dich an, um auf deine Daten zuzugreifen.</div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="authTabLogin">Anmelden</button>
+      <button class="auth-tab" id="authTabSignup">Konto erstellen</button>
+    </div>
+
+    <input type="email" id="authEmail" placeholder="E-Mail" autocomplete="email">
+    <input type="password" id="authPassword" placeholder="Passwort" autocomplete="current-password">
+    <div class="auth-error" id="authError" style="display:none;"></div>
+    <button class="auth-submit" id="authSubmitBtn">Anmelden</button>
+    <div class="auth-skip" id="authSkip">Ohne Konto lokal weitermachen</div>
+  </div>
+</div>
 
 <aside id="rail">
   <div class="sidebar-header">
@@ -1490,7 +1540,7 @@ async function safeGet(key){
     catch(e2){ return null; }
   }
 }
-async function safeSet(key,val){
+async function writeLocal(key,val){
   const raw = JSON.stringify(val);
   try{
     if(STORAGE_BACKEND==='external'){ await window.storage.set(key, raw, false); return; }
@@ -1501,6 +1551,10 @@ async function safeSet(key,val){
     try{ localStorage.setItem(key, raw); }catch(e2){}
   }
 }
+async function safeSet(key,val){
+  await writeLocal(key, val);
+  if(currentUser) pushKeyToCloud(key, val); // best effort, blockiert die UI nicht
+}
 async function safeDelete(key){
   try{
     if(STORAGE_BACKEND==='external'){ await window.storage.delete(key,false); return; }
@@ -1509,6 +1563,58 @@ async function safeDelete(key){
   }catch(e){
     try{ localStorage.removeItem(key); }catch(e2){}
   }
+}
+
+/* ============ CLOUD SYNC (Phase 4) ============
+   Rein additiv zur bestehenden Storage-Schicht — ohne Login verhält sich
+   NOVA exakt wie zuvor, rein lokal, kein Unterschied. Mit Login: safeSet
+   schreibt zusätzlich (best effort) nach Supabase; beim Anmelden wird
+   einmalig synchronisiert.
+
+   Sync-Strategie (bewusst einfach für diesen ersten Wurf, kein feingranulares
+   Merging): Beim Login gewinnt die Cloud-Version, sofern für einen Schlüssel
+   schon eine existiert — sonst wird der lokale Stand hochgeladen (erster
+   Sync von einem neuen Gerät/Konto aus). Kein Verlust in beide Richtungen,
+   aber auch kein Zusammenführen widersprüchlicher Änderungen von zwei
+   Geräten, die beide offline waren — das wäre der nächste Ausbauschritt. */
+const SUPABASE_URL = 'https://somlgmqmodprzvxcnlij.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNvbWxnbXFtb2Rwcnp2eGNubGlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5NjE5OTcsImV4cCI6MjEwMDUzNzk5N30.GWwkc3w-bJyfSYGpj2PA0z9S1Hsl9_wpS_cHkf94wG0';
+
+let supabaseClient = null;
+try{
+  if(typeof window!=='undefined' && window.supabase && typeof window.supabase.createClient==='function'){
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  }
+}catch(e){ console.error('Supabase-Client konnte nicht erstellt werden', e); }
+
+let currentUser = null;
+
+async function pushKeyToCloud(key, val){
+  if(!supabaseClient || !currentUser) return;
+  try{
+    await supabaseClient.from('nova_data').upsert(
+      { user_id: currentUser.id, key, value: val, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,key' }
+    );
+  }catch(e){ console.error('Cloud-Sync (push) fehlgeschlagen für', key, e); }
+}
+
+async function pullAllFromCloud(){
+  if(!supabaseClient || !currentUser) return;
+  try{
+    const { data, error } = await supabaseClient.from('nova_data').select('key,value').eq('user_id', currentUser.id);
+    if(error){ console.error('Cloud-Sync (pull) fehlgeschlagen', error); return; }
+    const cloudKeys = new Set((data||[]).map(r=>r.key));
+    for(const row of (data||[])){
+      await writeLocal(row.key, row.value); // writeLocal, nicht safeSet — sonst würde der Pull sofort wieder unnötig zurückgepusht
+    }
+    for(const key of NOVA_DATA_KEYS){
+      if(!cloudKeys.has(key)){
+        const localVal = await safeGet(key);
+        if(localVal!=null) await pushKeyToCloud(key, localVal);
+      }
+    }
+  }catch(e){ console.error('Cloud-Sync (pull) fehlgeschlagen', e); }
 }
 
 function todayStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -4289,6 +4395,12 @@ function wireMemoryList(){
 function renderEinstellungen(){
   document.getElementById('panelBody').innerHTML = `
     ${moduleIntroHTML('einstellungen')}
+    <div class="section-eyebrow">Konto</div>
+    ${currentUser
+      ? `<div class="toggle-row"><div><div class="tlbl">Angemeldet</div><div class="tsub">${esc(currentUser.email)} · Daten werden mit der Cloud synchronisiert</div></div></div>
+         <button class="wb-btn" id="logoutBtn" style="margin-bottom:6px;">Abmelden</button>`
+      : `<div class="toggle-row"><div><div class="tlbl">Nur lokal</div><div class="tsub">${supabaseClient ? 'Nicht angemeldet — Daten bleiben auf diesem Gerät.' : 'Cloud-Sync ist für diese Installation nicht eingerichtet.'}</div></div></div>`
+    }
     <div class="section-eyebrow">Persönliches</div>
     <div class="add-row">
       <input id="userNameInput" placeholder="Dein Name" value="${esc(state.settings.userName||'Ornob')}">
@@ -4315,6 +4427,11 @@ function renderEinstellungen(){
     <div style="text-align:center; margin-top:24px; font-size:11px; color:var(--text-3);">NOVA v${NOVA_APP_VERSION} · Datenformat v${NOVA_SCHEMA_VERSION}</div>
   `;
   wireMemoryList();
+  if(currentUser){
+    document.getElementById('logoutBtn').addEventListener('click', ()=>{
+      if(confirm('Wirklich abmelden? Deine Daten bleiben in der Cloud gespeichert.')) signOutOfCloud();
+    });
+  }
   document.getElementById('userNameInput').addEventListener('change', e=>{
     state.settings.userName = e.target.value.trim() || 'Ornob';
     safeSet('aria-settings', state.settings);
@@ -4940,7 +5057,90 @@ async function initApp(){
   }
   showMainView('dashboard');
 }
-initApp();
+
+/* ============ AUTH UI ============ */
+function showAuthScreen(show, subtitle){
+  document.getElementById('authScreen').style.display = show ? 'flex' : 'none';
+  if(subtitle) document.getElementById('authSubtitle').textContent = subtitle;
+}
+let authMode = 'login';
+function setAuthMode(mode){
+  authMode = mode;
+  document.getElementById('authTabLogin').classList.toggle('active', mode==='login');
+  document.getElementById('authTabSignup').classList.toggle('active', mode==='signup');
+  document.getElementById('authSubmitBtn').textContent = mode==='login' ? 'Anmelden' : 'Konto erstellen';
+  document.getElementById('authPassword').autocomplete = mode==='login' ? 'current-password' : 'new-password';
+  document.getElementById('authError').style.display = 'none';
+}
+document.getElementById('authTabLogin').addEventListener('click', ()=>setAuthMode('login'));
+document.getElementById('authTabSignup').addEventListener('click', ()=>setAuthMode('signup'));
+function showAuthError(msg){
+  const el = document.getElementById('authError');
+  el.textContent = msg; el.style.display = 'block';
+}
+async function handleAuthSubmit(){
+  if(!supabaseClient){ showAuthError('Cloud-Verbindung nicht verfügbar — bitte unten lokal weitermachen.'); return; }
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  if(!email || !password){ showAuthError('Bitte E-Mail und Passwort eingeben.'); return; }
+  const btn = document.getElementById('authSubmitBtn');
+  btn.disabled = true; btn.textContent = authMode==='login' ? 'Anmelden…' : 'Konto wird erstellt…';
+  document.getElementById('authError').style.display = 'none';
+  try{
+    const result = authMode==='login'
+      ? await supabaseClient.auth.signInWithPassword({email, password})
+      : await supabaseClient.auth.signUp({email, password});
+    if(result.error){ showAuthError(result.error.message); return; }
+    if(authMode==='signup' && !result.data.session){
+      showAuthError('Konto erstellt — bitte bestätige deine E-Mail-Adresse über den zugeschickten Link und melde dich danach an.');
+      setAuthMode('login');
+      return;
+    }
+    currentUser = result.data.user;
+    showAuthScreen(false);
+    await pullAllFromCloud();
+    await initApp();
+  }catch(e){
+    showAuthError('Etwas ist schiefgelaufen: '+e.message);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = authMode==='login' ? 'Anmelden' : 'Konto erstellen';
+  }
+}
+document.getElementById('authSubmitBtn').addEventListener('click', handleAuthSubmit);
+document.getElementById('authPassword').addEventListener('keydown', e=>{ if(e.key==='Enter') handleAuthSubmit(); });
+document.getElementById('authSkip').addEventListener('click', async ()=>{
+  showAuthScreen(false);
+  await initApp();
+});
+async function signOutOfCloud(){
+  if(supabaseClient) try{ await supabaseClient.auth.signOut(); }catch(e){}
+  currentUser = null;
+  location.reload();
+}
+
+/* ============ BOOT ============
+   Ist Supabase konfiguriert UND erreichbar, wird zuerst eine bestehende
+   Session geprüft — nur wenn wirklich keine da ist, erscheint der
+   Auth-Screen. Ohne Supabase (oder bei Fehlern beim Session-Check) startet
+   NOVA exakt wie vor Phase 4, rein lokal, ohne jede Wartezeit oder Screen. */
+async function bootNova(){
+  if(supabaseClient){
+    try{
+      const { data:{ session } } = await supabaseClient.auth.getSession();
+      if(session && session.user){
+        currentUser = session.user;
+        await pullAllFromCloud();
+        await initApp();
+        return;
+      }
+    }catch(e){ console.error('Session-Check fehlgeschlagen', e); }
+    showAuthScreen(true);
+    return;
+  }
+  await initApp();
+}
+bootNova();
 
 /* ============ SERVICE WORKER (Phase 3: PWA) ============
    Registriert sich selbst nur, wenn der Browser das grundsätzlich erlaubt.
