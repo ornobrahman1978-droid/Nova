@@ -595,6 +595,18 @@
   .panel-empty p{font-size:13.5px; margin:0 0 14px 0; line-height:1.6; color:var(--text-2); max-width:280px; margin-left:auto; margin-right:auto;}
 
   .add-row{display:flex; gap:8px; margin-bottom:18px;}
+  .meal-suggestions{
+    display:none; position:absolute; top:100%; left:0; right:0; margin-top:4px; z-index:20;
+    background:var(--elevated); border:1px solid var(--border-strong); border-radius:var(--r-md);
+    box-shadow:var(--shadow-soft); overflow:hidden;
+  }
+  .meal-suggestion-item{
+    display:flex; align-items:center; justify-content:space-between; padding:9px 12px; font-size:13px; color:var(--text-2);
+    cursor:pointer; transition:background var(--dur-fast) var(--ease);
+  }
+  .meal-suggestion-item:hover{ background:var(--surface-hover); color:var(--text); }
+  .meal-suggestion-item span{ font-size:11px; color:var(--text-3); font-family:'Inter Tight',sans-serif; }
+  .meal-macro-hint{ font-size:11.5px; color:var(--accent); margin:-12px 0 14px 2px; font-style:italic; }
   .add-row input, .add-row select{
     background:var(--surface); border:1px solid var(--border); color:var(--text);
     border-radius:var(--r-sm); padding:9px 11px; font-size:13.5px; flex:1; min-width:0;
@@ -3157,6 +3169,71 @@ function renderFitnessBody(container){
    jeden Zusatzcode über genericMultilogTrend, weil kein eigenes computeTrend
    nötig war — der Beweis, dass das Fundament aus der letzten Phase trägt. */
 const MEAL_TYPES = ['Frühstück','Mittagessen','Abendessen','Snack'];
+
+/* Lokale Nährwert-Datenbank (Werte pro 100g) — komplett offline, keine KI,
+   kein API-Aufruf. Bewusst eine feste, kuratierte Liste gängiger Lebensmittel
+   statt eines KI-Schätzwerts: verlässlicher, kostenlos, funktioniert auch
+   ganz ohne Internetverbindung oder funktionierenden Chat. */
+const FOOD_DB = [
+  {name:'Hähnchenbrust', kcal:165, protein:31, carbs:0, fat:3.6},
+  {name:'Hähnchenschenkel (frittiert, paniert)', kcal:277, protein:19, carbs:9, fat:19, piece:90},
+  {name:'Pute', kcal:135, protein:29, carbs:0, fat:1.7},
+  {name:'Rindfleisch (mager)', kcal:187, protein:26, carbs:0, fat:9},
+  {name:'Hackfleisch (gemischt)', kcal:254, protein:17, carbs:0, fat:20},
+  {name:'Lachs', kcal:208, protein:20, carbs:0, fat:13},
+  {name:'Thunfisch (Dose, im Wasser)', kcal:116, protein:26, carbs:0, fat:1},
+  {name:'Ei', kcal:155, protein:13, carbs:1.1, fat:11, piece:50},
+  {name:'Tofu', kcal:76, protein:8, carbs:1.9, fat:4.8},
+  {name:'Reis (gekocht)', kcal:130, protein:2.7, carbs:28, fat:0.3},
+  {name:'Reis (roh)', kcal:360, protein:7, carbs:79, fat:0.7},
+  {name:'Nudeln (gekocht)', kcal:158, protein:5.8, carbs:31, fat:0.9},
+  {name:'Kartoffeln (gekocht)', kcal:87, protein:1.9, carbs:20, fat:0.1},
+  {name:'Süßkartoffel (gekocht)', kcal:90, protein:2, carbs:21, fat:0.2},
+  {name:'Haferflocken', kcal:379, protein:13, carbs:67, fat:7},
+  {name:'Vollkornbrot', kcal:247, protein:9, carbs:41, fat:3.3},
+  {name:'Weißbrot', kcal:266, protein:9, carbs:49, fat:3.2},
+  {name:'Quinoa (gekocht)', kcal:120, protein:4.4, carbs:21, fat:1.9},
+  {name:'Couscous (gekocht)', kcal:112, protein:3.8, carbs:23, fat:0.2},
+  {name:'Linsen (gekocht)', kcal:116, protein:9, carbs:20, fat:0.4},
+  {name:'Kichererbsen (gekocht)', kcal:164, protein:8.9, carbs:27, fat:2.6},
+  {name:'Banane', kcal:89, protein:1.1, carbs:23, fat:0.3, piece:120},
+  {name:'Apfel', kcal:52, protein:0.3, carbs:14, fat:0.2, piece:180},
+  {name:'Orange', kcal:47, protein:0.9, carbs:12, fat:0.1, piece:150},
+  {name:'Beeren (gemischt)', kcal:43, protein:0.7, carbs:10, fat:0.3},
+  {name:'Avocado', kcal:160, protein:2, carbs:9, fat:15},
+  {name:'Brokkoli', kcal:34, protein:2.8, carbs:7, fat:0.4},
+  {name:'Spinat', kcal:23, protein:2.9, carbs:3.6, fat:0.4},
+  {name:'Tomate', kcal:18, protein:0.9, carbs:3.9, fat:0.2},
+  {name:'Gurke', kcal:15, protein:0.7, carbs:3.6, fat:0.1},
+  {name:'Karotte', kcal:41, protein:0.9, carbs:10, fat:0.2},
+  {name:'Paprika', kcal:31, protein:1, carbs:6, fat:0.3},
+  {name:'Salat (grün)', kcal:15, protein:1.4, carbs:2.9, fat:0.2},
+  {name:'Milch (3,5%)', kcal:64, protein:3.4, carbs:4.8, fat:3.6},
+  {name:'Naturjoghurt', kcal:61, protein:3.5, carbs:4.7, fat:3.3},
+  {name:'Griechischer Joghurt', kcal:97, protein:9, carbs:4, fat:5},
+  {name:'Magerquark', kcal:67, protein:12, carbs:4, fat:0.2},
+  {name:'Hüttenkäse', kcal:98, protein:11, carbs:3.4, fat:4.3},
+  {name:'Gouda', kcal:356, protein:25, carbs:2.2, fat:27},
+  {name:'Mozzarella', kcal:280, protein:22, carbs:2.2, fat:20},
+  {name:'Butter', kcal:717, protein:0.9, carbs:0.1, fat:81},
+  {name:'Olivenöl', kcal:884, protein:0, carbs:0, fat:100},
+  {name:'Mandeln', kcal:579, protein:21, carbs:22, fat:50},
+  {name:'Walnüsse', kcal:654, protein:15, carbs:14, fat:65},
+  {name:'Erdnussbutter', kcal:588, protein:25, carbs:20, fat:50},
+  {name:'Whey Protein (Pulver)', kcal:380, protein:80, carbs:6, fat:5},
+  {name:'Proteinriegel', kcal:370, protein:30, carbs:35, fat:12},
+  {name:'Schokolade (Vollmilch)', kcal:534, protein:7.6, carbs:59, fat:30},
+  {name:'Pizza (Margherita)', kcal:266, protein:11, carbs:33, fat:10},
+  {name:'Müsli', kcal:389, protein:9, carbs:66, fat:8},
+  {name:'Popcorn (natur)', kcal:387, protein:12, carbs:78, fat:4.5},
+  {name:'Chips', kcal:536, protein:6.6, carbs:53, fat:34},
+  {name:'Honig', kcal:304, protein:0.3, carbs:82, fat:0},
+];
+function searchFoodDb(query){
+  const q = query.trim().toLowerCase();
+  if(q.length<2) return [];
+  return FOOD_DB.filter(f=>f.name.toLowerCase().includes(q)).slice(0,6);
+}
 let nutritionTab = 'heute';
 
 /* ---- Supplement Stack ----
@@ -3490,11 +3567,15 @@ function renderNutritionToday(container){
     </div>
 
     <div class="section-eyebrow">Mahlzeit hinzufügen</div>
-    <div class="add-row" style="flex-wrap:wrap;">
-      <input id="mealName" placeholder="Name, z.B. Haferflocken" style="flex:1.4; min-width:140px;">
+    <div class="add-row" style="flex-wrap:wrap; position:relative;">
+      <input id="mealName" placeholder="Name, z.B. Hähnchenbrust" style="flex:1.4; min-width:140px;" autocomplete="off">
+      <input type="number" id="mealAmount" placeholder="Menge" value="100" style="width:70px;">
+      <select id="mealUnit" style="width:64px;"><option value="g">g</option><option value="stk">Stk.</option></select>
       <select id="mealType">${MEAL_TYPES.map(t=>`<option value="${t}">${t}</option>`).join('')}</select>
       <input type="time" id="mealTime" value="${new Date().toTimeString().slice(0,5)}">
+      <div id="mealSuggestions" class="meal-suggestions"></div>
     </div>
+    <div class="meal-macro-hint" id="mealMacroHint" style="display:none;"></div>
     <div class="add-row" style="margin-top:8px;">
       <input type="number" id="mealKcal" placeholder="kcal" style="width:70px;">
       <input type="number" id="mealProtein" placeholder="Protein g" style="width:80px;">
@@ -3514,7 +3595,52 @@ function renderNutritionToday(container){
     renderNutritionToday(container);
   }));
   document.getElementById('mealAddBtn').addEventListener('click', ()=>addMeal(container));
-  document.getElementById('mealName').addEventListener('keydown', e=>{ if(e.key==='Enter') addMeal(container); });
+  document.getElementById('mealName').addEventListener('keydown', e=>{ if(e.key==='Enter' && !document.getElementById('mealSuggestions').children.length) addMeal(container); });
+
+  let selectedFood = null;
+  const nameInput = document.getElementById('mealName');
+  const amountInput = document.getElementById('mealAmount');
+  const unitInput = document.getElementById('mealUnit');
+  const suggBox = document.getElementById('mealSuggestions');
+  const hintBox = document.getElementById('mealMacroHint');
+
+  function applyFoodMacros(){
+    if(!selectedFood) return;
+    const amount = parseFloat(amountInput.value)||0;
+    const grams = unitInput.value==='stk' ? amount*(selectedFood.piece||100) : amount;
+    const factor = grams/100;
+    document.getElementById('mealKcal').value = Math.round(selectedFood.kcal*factor);
+    document.getElementById('mealProtein').value = Math.round(selectedFood.protein*factor*10)/10;
+    document.getElementById('mealCarbs').value = Math.round(selectedFood.carbs*factor*10)/10;
+    document.getElementById('mealFat').value = Math.round(selectedFood.fat*factor*10)/10;
+    hintBox.style.display = 'block';
+    const unitLabel = unitInput.value==='stk' ? `${amount} Stück (à ${selectedFood.piece||100}g angenommen)` : `${grams}g`;
+    hintBox.textContent = `Automatisch aus NOVAs Lebensmittel-Datenbank für ${unitLabel} "${selectedFood.name}" — Werte bei Bedarf oben manuell anpassen.`;
+  }
+
+  nameInput.addEventListener('input', ()=>{
+    selectedFood = null;
+    hintBox.style.display = 'none';
+    const matches = searchFoodDb(nameInput.value);
+    if(!matches.length){ suggBox.innerHTML = ''; suggBox.style.display='none'; return; }
+    suggBox.innerHTML = matches.map((f,i)=>`<div class="meal-suggestion-item" data-i="${i}">${esc(f.name)}<span>${f.kcal} kcal /100g</span></div>`).join('');
+    suggBox.style.display = 'block';
+    suggBox.querySelectorAll('.meal-suggestion-item').forEach(el=>el.addEventListener('click', ()=>{
+      selectedFood = matches[parseInt(el.dataset.i)];
+      nameInput.value = selectedFood.name;
+      suggBox.innerHTML = ''; suggBox.style.display = 'none';
+      // Lebensmittel mit hinterlegtem Stück-Gewicht (Ei, Obst, Hähnchenschenkel...)
+      // werden naheliegend in Stück geloggt statt in Gramm.
+      if(selectedFood.piece){ unitInput.value = 'stk'; amountInput.value = 1; }
+      else { unitInput.value = 'g'; amountInput.value = 100; }
+      applyFoodMacros();
+    }));
+  });
+  amountInput.addEventListener('input', applyFoodMacros);
+  unitInput.addEventListener('change', applyFoodMacros);
+  document.addEventListener('click', e=>{
+    if(!suggBox.contains(e.target) && e.target!==nameInput){ suggBox.style.display='none'; }
+  });
 
   paintMeals(container, meals);
 }
